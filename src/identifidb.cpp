@@ -1433,6 +1433,67 @@ vector<CIdentifiPacket> CIdentifiDB::GetSavedPath(string_pair start, string_pair
     }
 
     sqlite3_finalize(statement);
+
+    if (path.empty())
+        path = Get2ndDegreeSavedPath(start, end, searchDepth);
+
+    return path;
+}
+
+/*
+    In order to use less disk space, we can build for example only 2nd degree trust maps for the most identifiers
+    and extend them via "supernodes" that have trust maps calculated to 4 degrees or more.
+*/
+vector<CIdentifiPacket> CIdentifiDB::Get2ndDegreeSavedPath(string_pair start, string_pair end, int searchDepth) {
+    vector<CIdentifiPacket> path, path1, path2;
+
+    if (start == end || (end.first == "" && end.second == ""))
+        return path;
+
+    sqlite3_stmt *statement;
+    ostringstream sql;
+
+    sql.str("");
+    sql << "SELECT middlepred.Value, middleID.Value ";
+    sql << "FROM TrustPaths AS tp1 ";
+    sql << "INNER JOIN TrustPaths AS tp2 ON tp1.EndID = tp2.StartID AND tp1.EndPredicateID = tp2.StartPredicateID ";
+    sql << "INNER JOIN Predicates AS startpred ON startpred.Value = @startpred ";
+    sql << "INNER JOIN Predicates AS middlepred ON middlepred.ID = tp1.EndPredicateID "; 
+    sql << "INNER JOIN Predicates AS endpred ON endpred.Value = @endpred ";
+    sql << "INNER JOIN Identifiers AS startID ON startID.Value = @startID ";
+    sql << "INNER JOIN Identifiers AS middleID ON middleID.ID = tp1.EndID ";
+    sql << "INNER JOIN Identifiers AS endID ON endID.Value = @endID ";
+    sql << "WHERE tp1.StartPredicateID = startpred.ID ";
+    sql << "AND tp1.StartID = startID.ID ";
+    sql << "AND tp2.EndPredicateID = endpred.ID ";
+    sql << "AND tp2.EndID = endID.ID ";
+
+cout << sql.str() << "\n";
+
+    string_pair middle;
+    if(sqlite3_prepare_v2(db, sql.str().c_str(), -1, &statement, 0) == SQLITE_OK) {
+        sqlite3_bind_text(statement, 1, start.first.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(statement, 2, end.first.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(statement, 3, start.second.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(statement, 4, end.second.c_str(), -1, SQLITE_TRANSIENT);
+
+        int result = sqlite3_step(statement);
+        if(result == SQLITE_ROW)
+        {  
+            middle = make_pair(string((char*)sqlite3_column_text(statement, 0)), string((char*)sqlite3_column_text(statement, 1)));
+        }
+    }
+    sqlite3_finalize(statement);
+
+    if (!middle.first.empty() && !middle.second.empty()) {
+        path1 = GetSavedPath(start, middle, searchDepth);
+        path2 = GetSavedPath(middle, end, searchDepth);
+        if (path1.back().GetHash() == path2.front().GetHash())
+            path1.pop_back();
+        path.insert(path.end(), path1.begin(), path1.end());
+        path.insert(path.end(), path2.begin(), path2.end());
+    }
+
     return path;
 }
 
